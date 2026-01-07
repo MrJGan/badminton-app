@@ -4,167 +4,234 @@ import random
 import itertools
 
 # --- 页面配置 ---
-st.set_page_config(page_title="羽毛球大乱斗", page_icon="🏸", layout="centered")
+st.set_page_config(page_title="羽毛球赛程表", page_icon="🏸", layout="centered")
 
-# --- 样式优化 (让它看起来像手机App) ---
+# --- CSS样式优化 (让它更像App) ---
 st.markdown("""
 <style>
-    .stButton>button { width: 100%; border-radius: 20px; height: 3em; font-weight: bold; }
-    .big-font { font-size: 20px !important; font-weight: bold; }
-    .rank-card { background-color: #f0f2f6; padding: 10px; border-radius: 10px; margin-bottom: 5px; }
-    .winner { color: #ff4b4b; font-weight: bold; }
+    .stButton>button { width: 100%; border-radius: 12px; height: 3em; font-weight: bold; }
+    .match-card { 
+        background-color: #f0f2f6; 
+        padding: 15px; 
+        border-radius: 10px; 
+        margin-bottom: 10px; 
+        border-left: 5px solid #ff4b4b;
+    }
+    .match-done {
+        background-color: #e8f5e9;
+        border-left: 5px solid #4caf50;
+        opacity: 0.8;
+    }
+    .big-score { font-size: 24px; font-weight: bold; color: #333; }
 </style>
 """, unsafe_allow_html=True)
 
 # --- 初始化数据 ---
 if 'players' not in st.session_state:
-    st.session_state.players = [] # 存储玩家名字
-if 'matches' not in st.session_state:
-    st.session_state.matches = [] # 存储比赛记录
-if 'current_match' not in st.session_state:
-    st.session_state.current_match = None # 当前正在进行的比赛
+    st.session_state.players = [] 
+if 'schedule' not in st.session_state:
+    st.session_state.schedule = [] # 存储生成的赛程列表 [{'id':1, 't1':(A,B), 't2':(C,D), 's1':0, 's2':0, 'done':False}]
 
-# --- 核心函数 ---
+# --- 核心算法逻辑 ---
+
+def generate_full_schedule():
+    """
+    生成全赛程逻辑：
+    1. 生成所有可能的搭档组合 (Pairs)
+    2. 将Pairs两两组合成比赛 (Match)
+    3. 尽量保证每个人在相邻场次得到休息（简单打乱）
+    """
+    players = st.session_state.players
+    n = len(players)
+    
+    if n < 4:
+        st.error("至少需要4人才能生成赛程！")
+        return
+
+    # 1. 生成所有双打组合 (比如8人会有28对组合)
+    all_pairs = list(itertools.combinations(players, 2))
+    random.shuffle(all_pairs) # 打乱顺序
+    
+    schedule = []
+    match_id = 1
+    
+    # 2. 贪心算法：尝试把配对组合成比赛
+    # 为了防止死循环（最后剩下两对有人冲突），我们尝试几次
+    attempts = 0
+    success = False
+    
+    while attempts < 50 and not success:
+        temp_pairs = all_pairs[:]
+        temp_schedule = []
+        possible = True
+        
+        while len(temp_pairs) >= 2:
+            pair1 = temp_pairs.pop(0) # 取出一对
+            
+            # 在剩下的对子里找一对，要求4个人互不重复
+            found_opponent = False
+            for i, pair2 in enumerate(temp_pairs):
+                # 检查两对是否有重复的人
+                if set(pair1).isdisjoint(set(pair2)):
+                    # 找到对手了！
+                    temp_pairs.pop(i)
+                    temp_schedule.append({
+                        'id': 0, # 稍后编号
+                        't1': pair1,
+                        't2': pair2,
+                        's1': 0, 
+                        's2': 0,
+                        'done': False
+                    })
+                    found_opponent = True
+                    break
+            
+            if not found_opponent:
+                # 如果这对找不到对手（比如剩下的人里都有重叠），这次尝试失败
+                possible = False
+                break
+        
+        if possible and len(temp_pairs) == 0:
+            success = True
+            # 给比赛编号
+            for idx, match in enumerate(temp_schedule):
+                match['id'] = idx + 1
+            schedule = temp_schedule
+        else:
+            attempts += 1
+            random.shuffle(all_pairs) # 重新洗牌再试
+
+    if success:
+        st.session_state.schedule = schedule
+        st.toast(f"成功生成 {len(schedule)} 场比赛！")
+    else:
+        st.error("生成失败：人数可能不支持完美循环（如6人），建议增减人数或手动重试。")
 
 def calculate_rankings():
-    """计算排名：胜场 -> 净胜分 -> 总得分"""
+    """计算排名"""
+    if not st.session_state.schedule:
+        return pd.DataFrame()
+
     stats = {p: {'matches': 0, 'wins': 0, 'losses': 0, 'points': 0, 'diff': 0} for p in st.session_state.players}
     
-    for m in st.session_state.matches:
-        # m = {'t1': [p1, p2], 't2': [p3, p4], 's1': score1, 's2': score2}
-        s1 = m['s1']
-        s2 = m['s2']
-        
-        # 队伍1统计
-        for p in m['t1']:
-            stats[p]['matches'] += 1
-            stats[p]['points'] += s1
-            stats[p]['diff'] += (s1 - s2)
-            if s1 > s2: stats[p]['wins'] += 1
-            else: stats[p]['losses'] += 1
+    for m in st.session_state.schedule:
+        if m['done']: # 只计算已完成的比赛
+            s1 = m['s1']
+            s2 = m['s2']
             
-        # 队伍2统计
-        for p in m['t2']:
-            stats[p]['matches'] += 1
-            stats[p]['points'] += s2
-            stats[p]['diff'] += (s2 - s1)
-            if s2 > s1: stats[p]['wins'] += 1
-            else: stats[p]['losses'] += 1
+            # 队伍1
+            for p in m['t1']:
+                stats[p]['matches'] += 1
+                stats[p]['points'] += s1
+                stats[p]['diff'] += (s1 - s2)
+                if s1 > s2: stats[p]['wins'] += 1
+                elif s1 < s2: stats[p]['losses'] += 1
+            
+            # 队伍2
+            for p in m['t2']:
+                stats[p]['matches'] += 1
+                stats[p]['points'] += s2
+                stats[p]['diff'] += (s2 - s1)
+                if s2 > s1: stats[p]['wins'] += 1
+                elif s2 < s1: stats[p]['losses'] += 1
 
-    # 转为DataFrame并排序
     df = pd.DataFrame.from_dict(stats, orient='index')
     if not df.empty:
         df = df.sort_values(by=['wins', 'diff', 'points'], ascending=[False, False, False])
-        df['胜率'] = df.apply(lambda x: f"{int(x['wins'])}胜-{int(x['losses'])}负", axis=1)
-        return df[['胜率', 'diff', 'points']] # 展示列：胜率，净胜分，总分
+        df['胜率'] = df.apply(lambda x: f"{int(x['wins'])}胜 {int(x['losses'])}负", axis=1)
+        return df[['胜率', 'diff', 'points', 'matches']]
     return pd.DataFrame()
-
-def generate_match():
-    """自动生成对阵：优先选场次少的人"""
-    if len(st.session_state.players) < 4:
-        st.error("至少需要4人才能开始双打！")
-        return
-
-    # 统计每个人打了几场
-    match_counts = {p: 0 for p in st.session_state.players}
-    for m in st.session_state.matches:
-        for p in m['t1'] + m['t2']:
-            match_counts[p] += 1
-            
-    # 按场次从小到大排序，取出场最少的4个人
-    sorted_players = sorted(match_counts.items(), key=lambda item: item[1])
-    # 为了避免每次都是固定组合，如果有多人场次相同，随机打乱
-    candidates = [p[0] for p in sorted_players]
-    
-    # 取前4个（如果大家场次一样，就随机取4个）
-    # 这里做一个加权随机或者简单随机，为了简单且公平，我们取场次最少的N个人，从中随机选4个
-    min_count = sorted_players[0][1]
-    pool = [p for p, c in sorted_players if c <= min_count + 1] # 选取场次最少和次少的人作为候选池
-    
-    if len(pool) < 4:
-        pool = candidates[:6] # 候选池不够就扩大范围
-        
-    selected = random.sample(pool, 4)
-    random.shuffle(selected)
-    
-    st.session_state.current_match = {
-        't1': [selected[0], selected[1]],
-        't2': [selected[2], selected[3]]
-    }
 
 # --- 界面 UI ---
 
-st.title("🏸 羽毛球大乱斗助手")
+st.title("🏸 羽毛球排赛神器")
 
-# 1. 选手管理
-with st.expander("管理选手 (当前 {} 人)".format(len(st.session_state.players))):
-    new_player = st.text_input("输入名字添加", key="add_input")
-    if st.button("添加选手"):
+# 顶部导航
+tab1, tab2, tab3 = st.tabs(["📅 赛程表 (录分)", "🏆 排行榜", "⚙️ 设置"])
+
+# === Tab 1: 赛程表 ===
+with tab1:
+    if not st.session_state.schedule:
+        st.info("暂无赛程，请去【设置】页生成比赛。")
+    else:
+        # 显示进度条
+        done_count = sum(1 for m in st.session_state.schedule if m['done'])
+        total_count = len(st.session_state.schedule)
+        st.progress(done_count / total_count if total_count > 0 else 0)
+        st.caption(f"进度: {done_count} / {total_count} 场")
+
+        # 遍历显示所有比赛
+        for i, match in enumerate(st.session_state.schedule):
+            # 样式：已完成的变绿，未完成的默认
+            container_class = "match-done" if match['done'] else "match-card"
+            status_icon = "✅" if match['done'] else "🔴"
+            
+            t1_str = f"{match['t1'][0]} & {match['t1'][1]}"
+            t2_str = f"{match['t2'][0]} & {match['t2'][1]}"
+            
+            # 使用 expander 做折叠卡片
+            with st.expander(f"{status_icon} 第 {match['id']} 场: {t1_str} VS {t2_str} ({match['s1']}:{match['s2']})", expanded=not match['done']):
+                
+                c1, c2, c3 = st.columns([2, 2, 1])
+                with c1:
+                    new_s1 = st.number_input("红队得分", min_value=0, value=match['s1'], key=f"s1_{match['id']}")
+                with c2:
+                    new_s2 = st.number_input("蓝队得分", min_value=0, value=match['s2'], key=f"s2_{match['id']}")
+                with c3:
+                    st.write(" ")
+                    st.write(" ")
+                    if st.button("确认", key=f"btn_{match['id']}"):
+                        # 更新状态
+                        st.session_state.schedule[i]['s1'] = new_s1
+                        st.session_state.schedule[i]['s2'] = new_s2
+                        st.session_state.schedule[i]['done'] = True
+                        st.rerun()
+                
+                if match['done']:
+                    if st.button("撤销/修改", key=f"undo_{match['id']}"):
+                        st.session_state.schedule[i]['done'] = False
+                        st.rerun()
+
+# === Tab 2: 排行榜 ===
+with tab2:
+    st.header("实时排名")
+    df_rank = calculate_rankings()
+    if not df_rank.empty:
+        st.dataframe(
+            df_rank.style.highlight_max(axis=0, color='lightgreen'), 
+            use_container_width=True
+        )
+    else:
+        st.write("比赛还没开始，暂无数据。")
+
+# === Tab 3: 设置与生成 ===
+with tab3:
+    st.header("管理选手")
+    
+    # 快速添加
+    new_player = st.text_input("输入名字 (回车添加)", key="add_input")
+    if st.button("添加"):
         if new_player and new_player not in st.session_state.players:
             st.session_state.players.append(new_player)
+            st.success(f"已添加 {new_player}")
             st.rerun()
+
+    st.write(f"当前名单 ({len(st.session_state.players)}人):")
+    st.code(", ".join(st.session_state.players))
     
-    st.write("参赛名单:", ", ".join(st.session_state.players))
-    if st.button("重置所有数据 (慎点)"):
+    st.markdown("---")
+    st.header("生成操作")
+    
+    st.info("提示：8人会自动生成14场比赛（每人搭档7次）。")
+    
+    if st.button("🎲 生成全赛程表 (慎点，会清空旧分)", type="primary"):
+        if len(st.session_state.players) >= 4:
+            generate_full_schedule()
+            st.rerun()
+        else:
+            st.error("至少需要4人！")
+
+    if st.button("⚠️ 清空所有数据"):
         st.session_state.players = []
-        st.session_state.matches = []
-        st.session_state.current_match = None
+        st.session_state.schedule = []
         st.rerun()
-
-# 2. 比赛控制区
-st.header("⚔️ 比赛进行中")
-
-if st.session_state.current_match is None:
-    if len(st.session_state.players) >= 4:
-        if st.button("🎲 生成下一场对阵", type="primary"):
-            generate_match()
-            st.rerun()
-    else:
-        st.info("请先添加至少4名选手")
-else:
-    cm = st.session_state.current_match
-    t1_name = f"{cm['t1'][0]} & {cm['t1'][1]}"
-    t2_name = f"{cm['t2'][0]} & {cm['t2'][1]}"
-    
-    st.subheader(f"🔴 {t1_name}  VS  🔵 {t2_name}")
-    
-    c1, c2 = st.columns(2)
-    with c1:
-        s1 = st.number_input("🔴 红队得分", min_value=0, step=1, key="s1_in")
-    with c2:
-        s2 = st.number_input("🔵 蓝队得分", min_value=0, step=1, key="s2_in")
-        
-    col_submit, col_cancel = st.columns(2)
-    with col_submit:
-        if st.button("✅ 结束并记录"):
-            # 记录比赛
-            record = {
-                't1': cm['t1'], 't2': cm['t2'],
-                's1': int(s1), 's2': int(s2)
-            }
-            st.session_state.matches.insert(0, record) # 新比赛放前面
-            st.session_state.current_match = None # 清空当前比赛
-            st.rerun()
-            
-    with col_cancel:
-        if st.button("❌ 取消本场"):
-            st.session_state.current_match = None
-            st.rerun()
-
-# 3. 实时排行榜
-st.header("🏆 实时排名")
-df_rank = calculate_rankings()
-if not df_rank.empty:
-    # 美化显示
-    st.dataframe(
-        df_rank.style.highlight_max(axis=0, color='lightgreen'), 
-        use_container_width=True
-    )
-else:
-    st.write("暂无比赛数据")
-
-# 4. 历史记录
-with st.expander("查看历史对阵记录"):
-    for i, m in enumerate(st.session_state.matches):
-        winner = "红队" if m['s1'] > m['s2'] else "蓝队"
-        st.markdown(f"**第 {len(st.session_state.matches)-i} 场**: {m['t1'][0]}+{m['t1'][1]} ({m['s1']}) vs ({m['s2']}) {m['t2'][0]}+{m['t2'][1]}")
