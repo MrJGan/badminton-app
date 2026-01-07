@@ -4,7 +4,7 @@ import random
 import itertools
 
 # --- 页面配置 ---
-st.set_page_config(page_title="羽毛球智能排赛", page_icon="🏸", layout="centered")
+st.set_page_config(page_title="羽毛球排赛小助手", page_icon="🏸", layout="centered")
 
 # --- CSS 样式 ---
 st.markdown("""
