@@ -6,60 +6,14 @@ import itertools
 # --- 页面配置 ---
 st.set_page_config(page_title="羽毛球赛程表", page_icon="🏸", layout="centered")
 
-# --- CSS 样式重构 (核心修改点) ---
+# --- CSS 微调 (仅保留最安全的样式) ---
 st.markdown("""
 <style>
-    /* 全局按钮样式 */
-    .stButton>button { width: 100%; border-radius: 20px; font-weight: bold; }
-    
-    /* 对阵卡片容器 */
-    .match-card-container {
-        background-color: white;
-        border-radius: 12px;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-        border: 1px solid #e0e0e0;
-        margin-bottom: 12px;
-        padding: 12px;
-    }
-    
-    /* 已完成的卡片样式 */
-    .match-card-done {
-        background-color: #f0f9f0; /* 淡淡的绿色背景 */
-        border: 1px solid #c3e6cb;
-    }
-
-    /* 队名样式 */
-    .team-name { font-size: 16px; font-weight: 600; line-height: 1.4; }
-    .team-red { color: #d32f2f; }
-    .team-blue { color: #1976d2; }
-    
-    /* 中间VS和比分样式 */
-    .vs-score { 
-        font-size: 20px; 
-        font-weight: 900; 
-        text-align: center; 
-        color: #333;
-        font-family: 'Arial', sans-serif;
-    }
-    .score-display {
-        font-size: 24px;
-        color: #2e7d32; /* 绿色比分 */
-    }
-    
-    /* 场次标签 */
-    .match-tag {
-        font-size: 12px;
-        color: #888;
-        margin-bottom: 4px;
-        display: block;
-    }
-    
-    /* 去掉Streamlit原生Expander的边框，让它融入卡片 */
-    .streamlit-expanderHeader {
-        background-color: transparent !important;
-        font-size: 14px !important;
-        color: #555 !important;
-    }
+    .stButton>button { width: 100%; border-radius: 12px; font-weight: bold; }
+    /* 让分数的输入框稍微大一点 */
+    .stNumberInput input { font-size: 18px; font-weight: bold; text-align: center; }
+    /* 调整表格字体 */
+    .stDataFrame td { font-size: 16px !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -71,13 +25,14 @@ if 'schedule' not in st.session_state:
 
 # --- 核心算法逻辑 (保持不变) ---
 def generate_full_schedule():
-    players = st.session_state.players
-    n = len(players)
+    # 从 session_state 获取最新的 player 列表 (去重且去空)
+    current_players = [p for p in st.session_state.players if p.strip()]
+    n = len(current_players)
     if n < 4:
         st.error("至少需要4人才能生成赛程！")
         return
 
-    all_pairs = list(itertools.combinations(players, 2))
+    all_pairs = list(itertools.combinations(current_players, 2))
     random.shuffle(all_pairs)
     
     schedule = []
@@ -123,7 +78,13 @@ def calculate_rankings():
     if not st.session_state.schedule:
         return pd.DataFrame()
 
-    stats = {p: {'wins': 0, 'losses': 0, 'diff': 0, 'points': 0, 'total_score': 0} for p in st.session_state.players}
+    # 重新初始化统计，确保用的是最新名单
+    active_players = set()
+    for m in st.session_state.schedule:
+        for p in m['t1'] + m['t2']:
+            active_players.add(p)
+            
+    stats = {p: {'wins': 0, 'losses': 0, 'diff': 0, 'points': 0, 'total_score': 0} for p in active_players}
     
     for m in st.session_state.schedule:
         if m['done']:
@@ -174,73 +135,58 @@ def calculate_rankings():
 
 st.title("🏸 羽毛球赛程表")
 
-tab1, tab2, tab3 = st.tabs(["📅 对阵表", "🏆 排行榜", "⚙️ 设置"])
+tab1, tab2, tab3 = st.tabs(["📅 对阵录分", "🏆 排行榜", "⚙️ 名单设置"])
 
-# === Tab 1: 对阵表 (UI大改版) ===
+# === Tab 1: 对阵表 (原生组件重构版) ===
 with tab1:
     if not st.session_state.schedule:
-        st.info("暂无赛程，请去【设置】页生成比赛。")
+        st.info("暂无赛程，请去【名单设置】页生成比赛。")
     else:
         # 进度条
         done_count = sum(1 for m in st.session_state.schedule if m['done'])
         total_count = len(st.session_state.schedule)
-        st.caption(f"比赛进度: {done_count} / {total_count}")
         st.progress(done_count / total_count if total_count > 0 else 0)
+        st.caption(f"进度: {done_count} / {total_count}")
 
         for i, match in enumerate(st.session_state.schedule):
-            # 准备数据
-            t1_names = f"{match['t1'][0]}<br>{match['t1'][1]}" # 使用HTML换行
-            t2_names = f"{match['t2'][0]}<br>{match['t2'][1]}"
-            
-            # 判断状态，决定样式
-            if match['done']:
-                card_class = "match-card-container match-card-done"
-                center_content = f"<div class='vs-score score-display'>{match['s1']} : {match['s2']}</div>"
-                status_text = "✅ 已结束 (点击修改)"
-            else:
-                card_class = "match-card-container"
-                center_content = "<div class='vs-score' style='color:#ccc;'>VS</div>"
-                status_text = "📝 录入比分"
-
-            # --- 渲染自定义 HTML 卡片 ---
-            st.markdown(f"""
-            <div class="{card_class}">
-                <span class="match-tag">第 {match['id']} 场</span>
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <div style="text-align: left; width: 35%;" class="team-name team-red">
-                        {t1_names}
-                    </div>
-                    
-                    <div style="width: 30%;">
-                        {center_content}
-                    </div>
-                    
-                    <div style="text-align: right; width: 35%;" class="team-name team-blue">
-                        {t2_names}
-                    </div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-
-            # --- 录入区域 (使用 Expander 隐藏) ---
-            # 我们把 Expander 放在卡片下面，或者视觉上看起来像是在卡片里
-            with st.expander(status_text):
-                c1, c2, c3 = st.columns([2, 2, 1])
-                with c1:
-                    new_s1 = st.number_input("🔴红分", 0, 30, match['s1'], key=f"s1_{match['id']}")
-                with c2:
-                    new_s2 = st.number_input("🔵蓝分", 0, 30, match['s2'], key=f"s2_{match['id']}")
-                with c3:
-                    st.write("") # 占位
-                    st.write("") 
-                    if st.button("确认", key=f"btn_{match['id']}"):
-                        st.session_state.schedule[i]['s1'] = new_s1
-                        st.session_state.schedule[i]['s2'] = new_s2
-                        st.session_state.schedule[i]['done'] = True
-                        st.rerun()
+            # 使用 container(border=True) 创建原生卡片，这是最稳定的方法
+            with st.container(border=True):
+                # 第一行：显示对阵双方名字
+                c_p1, c_vs, c_p2 = st.columns([5, 2, 5])
                 
-                if match['done']:
-                    if st.button("撤销重录", key=f"undo_{match['id']}"):
+                with c_p1:
+                    st.markdown(f"**:red[{match['t1'][0]}]**")
+                    st.markdown(f"**:red[{match['t1'][1]}]**")
+                
+                with c_vs:
+                    if match['done']:
+                        st.markdown(f"<h3 style='text-align: center; color: green; margin:0;'>{match['s1']}:{match['s2']}</h3>", unsafe_allow_html=True)
+                    else:
+                        st.markdown("<h3 style='text-align: center; color: #ddd; margin:0;'>VS</h3>", unsafe_allow_html=True)
+
+                with c_p2:
+                    st.markdown(f"<div style='text-align: right; color: #1976d2; font-weight:bold'>{match['t2'][0]}</div>", unsafe_allow_html=True)
+                    st.markdown(f"<div style='text-align: right; color: #1976d2; font-weight:bold'>{match['t2'][1]}</div>", unsafe_allow_html=True)
+                
+                st.divider() # 分割线
+
+                # 第二行：录入/修改区域 (直接在同一个卡片里)
+                if not match['done']:
+                    # --- 录分模式 ---
+                    c_in1, c_in2, c_btn = st.columns([3, 3, 2])
+                    with c_in1:
+                        new_s1 = st.number_input("红分", 0, 30, match['s1'], key=f"s1_{match['id']}", label_visibility="collapsed")
+                    with c_in2:
+                        new_s2 = st.number_input("蓝分", 0, 30, match['s2'], key=f"s2_{match['id']}", label_visibility="collapsed")
+                    with c_btn:
+                        if st.button("确认", key=f"btn_{match['id']}", type="primary"):
+                            st.session_state.schedule[i]['s1'] = new_s1
+                            st.session_state.schedule[i]['s2'] = new_s2
+                            st.session_state.schedule[i]['done'] = True
+                            st.rerun()
+                else:
+                    # --- 已结束模式 (仅显示修改按钮) ---
+                    if st.button("🔄 修改比分", key=f"undo_{match['id']}"):
                         st.session_state.schedule[i]['done'] = False
                         st.rerun()
 
@@ -265,22 +211,36 @@ with tab2:
     else:
         st.info("暂无数据")
 
-# === Tab 3: 设置 ===
+# === Tab 3: 名单设置 (换成了表格编辑器) ===
 with tab3:
-    st.header("管理选手")
-    new_player = st.text_input("输入名字 (回车)", key="add_input")
-    if st.button("添加"):
-        if new_player and new_player not in st.session_state.players:
-            st.session_state.players.append(new_player)
-            st.success(f"已添加 {new_player}")
-            st.rerun()
-    st.write(f"当前名单 ({len(st.session_state.players)}人):")
-    st.code(", ".join(st.session_state.players))
+    st.header("📋 选手名单管理")
+    st.info("💡 在下方表格中直接修改、添加或删除名字。")
+
+    # 1. 准备数据：把 list 转成 DataFrame
+    df_players = pd.DataFrame(st.session_state.players, columns=["选手姓名"])
+
+    # 2. 显示编辑器 (允许增删改)
+    edited_df = st.data_editor(
+        df_players,
+        num_rows="dynamic", # 允许添加和删除行
+        use_container_width=True,
+        key="player_editor"
+    )
+
+    # 3. 实时同步回 session_state
+    # 注意：这里我们只要非空的名字
+    new_player_list = edited_df["选手姓名"].dropna().astype(str).tolist()
+    st.session_state.players = new_player_list
+
     st.markdown("---")
-    if st.button("🎲 生成全赛程表 (8人=14场)", type="primary"):
+    st.write(f"当前人数: **{len(st.session_state.players)}** 人")
+    
+    # 生成按钮
+    btn_disabled = len(st.session_state.players) < 4
+    if st.button("🎲 生成新赛程 (8人=14场)", type="primary", disabled=btn_disabled):
         generate_full_schedule()
         st.rerun()
-    if st.button("🗑️ 清空所有数据"):
-        st.session_state.players = []
+        
+    if st.button("⚠️ 清空所有赛程"):
         st.session_state.schedule = []
         st.rerun()
