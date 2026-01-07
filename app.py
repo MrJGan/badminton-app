@@ -4,7 +4,7 @@ import random
 import itertools
 
 # --- 页面配置 ---
-st.set_page_config(page_title="羽毛球大乱斗", page_icon="🏸", layout="mobile")
+st.set_page_config(page_title="羽毛球大乱斗", page_icon="🏸", layout="centered")
 
 # --- 样式优化 (让它看起来像手机App) ---
 st.markdown("""
