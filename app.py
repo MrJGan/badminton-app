@@ -4,7 +4,7 @@ import random
 import itertools
 
 # --- 页面配置 ---
-st.set_page_config(page_title="羽毛球赛程表", page_icon="🏸", layout="centered")
+st.set_page_config(page_title="羽毛球智能排赛", page_icon="🏸", layout="centered")
 
 # --- CSS 样式 ---
 st.markdown("""
@@ -12,6 +12,18 @@ st.markdown("""
     .stButton>button { width: 100%; border-radius: 12px; font-weight: bold; }
     .stNumberInput input { font-size: 18px; font-weight: bold; text-align: center; }
     .stDataFrame td { font-size: 16px !important; }
+    
+    /* 模式徽章 */
+    .mode-badge {
+        padding: 5px 10px;
+        border-radius: 15px;
+        font-size: 12px;
+        font-weight: bold;
+        display: inline-block;
+        margin-bottom: 10px;
+    }
+    .badge-casual { background-color: #e3f2fd; color: #1565c0; border: 1px solid #1565c0; }
+    .badge-pro { background-color: #fff3e0; color: #e65100; border: 1px solid #e65100; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -19,58 +31,117 @@ st.markdown("""
 if 'players' not in st.session_state:
     st.session_state.players = [] 
 if 'schedule' not in st.session_state:
-    st.session_state.schedule = [] 
+    st.session_state.schedule = []
+if 'match_mode' not in st.session_state:
+    st.session_state.match_mode = "casual" # casual 或 pro
 
 # --- 核心算法逻辑 ---
-def generate_full_schedule():
-    # 双重保险：生成前再次过滤空名字
+
+def get_target_match_count(n, mode):
+    """
+    根据人数和模式，决定总场次
+    """
+    if n < 4: return 0
+    
+    # === ☕ 养生/标准模式 (目标：每人~4场) ===
+    if mode == "casual":
+        if n == 5: return 5  # 每人4场
+        if n == 6: return 6  # 每人4场
+        if n == 7: return 7  # 每人4场
+        if n == 8: return 8  # 每人4场
+        # 其他人数：寻找每人至少3-4场的倍数
+        return int(n * 4 / 4) # 简单估算，保持n场左右
+        
+    # === 🔥 激斗/全循环模式 (目标：每人6-7场，或全搭档) ===
+    if mode == "pro":
+        if n == 5: return 5   # 5人本身就是全循环，无需增加
+        if n == 6: return 9   # 🌟 6人9场：每人6场 (完美全互搭)
+        if n == 7: return 10  # 🌟 7人10场：每人约5.7场 (高强度)
+        if n == 8: return 14  # 🌟 8人14场：每人7场 (完美全互搭)
+        
+        # 9人以上Pro模式太累，回归到每人5场左右
+        return int(n * 5 / 4) + 2 
+
+def generate_full_schedule(mode):
     current_players = [p for p in st.session_state.players if p and str(p).strip()]
     n = len(current_players)
     if n < 4:
         st.error("至少需要4人才能生成赛程！")
         return
 
+    # 1. 获取目标场次
+    target_matches = get_target_match_count(n, mode)
+    st.session_state.match_mode = mode # 记录当前模式
+    
+    # 2. 生成所有组合
     all_pairs = list(itertools.combinations(current_players, 2))
     random.shuffle(all_pairs)
     
-    schedule = []
-    attempts = 0
-    success = False
+    # 3. 贪心算法
+    best_schedule = []
     
-    while attempts < 100 and not success:
+    # 增加尝试次数，确保Pro模式能算出来
+    max_attempts = 500
+    
+    for _ in range(max_attempts):
+        random.shuffle(all_pairs)
         temp_pairs = all_pairs[:]
         temp_schedule = []
-        possible = True
+        player_counts = {p: 0 for p in current_players}
         
-        while len(temp_pairs) >= 2:
-            pair1 = temp_pairs.pop(0)
-            found_opponent = False
-            for i, pair2 in enumerate(temp_pairs):
-                if set(pair1).isdisjoint(set(pair2)):
-                    temp_pairs.pop(i)
-                    temp_schedule.append({
-                        'id': 0, 't1': pair1, 't2': pair2, 's1': 0, 's2': 0, 'done': False
-                    })
-                    found_opponent = True
-                    break
-            if not found_opponent:
-                possible = False
-                break
+        for _ in range(target_matches):
+            # 动态排序：优先选出场最少的人
+            temp_pairs.sort(key=lambda x: player_counts[x[0]] + player_counts[x[1]])
+            
+            if not temp_pairs: break
+            
+            found_match = False
+            search_limit = min(len(temp_pairs), 20) # 性能优化
+            
+            for i in range(search_limit):
+                pair1 = temp_pairs[i]
+                for j in range(i + 1, search_limit):
+                    pair2 = temp_pairs[j]
+                    
+                    if set(pair1).isdisjoint(set(pair2)):
+                        # 检查重复对阵：如果是Pro模式(6人9场)，允许极少量重复？
+                        # 这里我们坚持不重复搭档原则 (all_pairs里每种组合只有一个)
+                        
+                        temp_schedule.append({
+                            'id': 0, 't1': pair1, 't2': pair2, 's1': 0, 's2': 0, 'done': False
+                        })
+                        player_counts[pair1[0]] += 1
+                        player_counts[pair1[1]] += 1
+                        player_counts[pair2[0]] += 1
+                        player_counts[pair2[1]] += 1
+                        
+                        temp_pairs.remove(pair1)
+                        temp_pairs.remove(pair2)
+                        found_match = True
+                        break
+                if found_match: break
+            
+            if not found_match: break
         
-        if possible and len(temp_pairs) == 0:
-            success = True
-            for idx, match in enumerate(temp_schedule):
-                match['id'] = idx + 1
-            schedule = temp_schedule
-        else:
-            attempts += 1
-            random.shuffle(all_pairs)
+        if len(temp_schedule) == target_matches:
+            best_schedule = temp_schedule
+            break
+        if len(temp_schedule) > len(best_schedule):
+            best_schedule = temp_schedule
 
-    if success:
-        st.session_state.schedule = schedule
-        st.toast(f"成功生成 {len(schedule)} 场比赛！")
+    if len(best_schedule) > 0:
+        for idx, match in enumerate(best_schedule):
+            match['id'] = idx + 1
+        st.session_state.schedule = best_schedule
+        
+        # 成功提示
+        msg = f"已生成 {len(best_schedule)} 场比赛！"
+        if mode == "pro":
+            st.toast("🔥 激斗模式开启！建议改为 15 分制以节省体力。", icon="💡")
+        else:
+            st.toast(msg)
     else:
-        st.error("生成失败，请重试或增减人数。")
+        st.error("生成失败，请重试。")
 
 def calculate_rankings():
     if not st.session_state.schedule:
@@ -130,15 +201,25 @@ def calculate_rankings():
 
 # --- 界面 UI ---
 
-st.title("🏸 羽毛球赛程表")
+st.title("🏸 羽毛球智能排赛")
 
-tab1, tab2, tab3 = st.tabs(["📅 对阵录分", "🏆 排行榜", "⚙️ 名单设置"])
+tab1, tab2, tab3 = st.tabs(["📅 对阵录分", "🏆 排行榜", "⚙️ 赛制设置"])
 
 # === Tab 1: 对阵表 ===
 with tab1:
     if not st.session_state.schedule:
-        st.info("暂无赛程，请去【名单设置】页生成比赛。")
+        st.info("暂无赛程，请去【赛制设置】页生成比赛。")
     else:
+        # 显示当前模式提示
+        if st.session_state.match_mode == "pro":
+            st.markdown("""
+            <div class="mode-badge badge-pro">🔥 激斗模式 (推荐 15 分制)</div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div class="mode-badge badge-casual">☕ 养生模式 (推荐 21 分制)</div>
+            """, unsafe_allow_html=True)
+
         done_count = sum(1 for m in st.session_state.schedule if m['done'])
         total_count = len(st.session_state.schedule)
         st.progress(done_count / total_count if total_count > 0 else 0)
@@ -147,17 +228,14 @@ with tab1:
         for i, match in enumerate(st.session_state.schedule):
             with st.container(border=True):
                 c_p1, c_vs, c_p2 = st.columns([5, 2, 5])
-                
                 with c_p1:
                     st.markdown(f"**:red[{match['t1'][0]}]**")
                     st.markdown(f"**:red[{match['t1'][1]}]**")
-                
                 with c_vs:
                     if match['done']:
                         st.markdown(f"<h3 style='text-align: center; color: green; margin:0;'>{match['s1']}:{match['s2']}</h3>", unsafe_allow_html=True)
                     else:
                         st.markdown("<h3 style='text-align: center; color: #ddd; margin:0;'>VS</h3>", unsafe_allow_html=True)
-
                 with c_p2:
                     st.markdown(f"<div style='text-align: right; color: #1976d2; font-weight:bold'>{match['t2'][0]}</div>", unsafe_allow_html=True)
                     st.markdown(f"<div style='text-align: right; color: #1976d2; font-weight:bold'>{match['t2'][1]}</div>", unsafe_allow_html=True)
@@ -202,46 +280,45 @@ with tab2:
     else:
         st.info("暂无数据")
 
-# === Tab 3: 名单设置 (修复版) ===
+# === Tab 3: 赛制设置 ===
 with tab3:
-    st.header("📋 选手名单管理")
-    st.info("💡 在下方表格中直接修改、添加或删除名字。")
-
-    # 1. 准备数据
-    df_players = pd.DataFrame(st.session_state.players, columns=["选手姓名"])
-
-    # 2. 显示编辑器
-    edited_df = st.data_editor(
-        df_players,
-        num_rows="dynamic",
-        use_container_width=True,
-        key="player_editor"
-    )
-
-    # 3. 实时同步回 session_state（并过滤掉空行！）
-    # 逻辑：取那一列 -> 转列表 -> 过滤掉 None 和 空字符串
-    raw_list = edited_df["选手姓名"].tolist()
-    # 核心修复代码如下：
-    clean_list = [str(p) for p in raw_list if pd.notna(p) and str(p).strip() != ""]
+    st.header("📋 选手与模式")
     
-    st.session_state.players = clean_list
+    # 1. 模式选择
+    st.subheader("1️⃣ 选择模式")
+    mode_option = st.radio(
+        "赛制强度:",
+        ("casual", "pro"),
+        format_func=lambda x: "☕ 养生休闲 (每人~4场 / 21分制)" if x == "casual" else "🔥 激斗循环 (全互搭 / 15分制)"
+    )
 
     st.markdown("---")
     
-    # 计算当前有效的真实人数
+    # 2. 名单编辑
+    st.subheader("2️⃣ 编辑名单")
+    df_players = pd.DataFrame(st.session_state.players, columns=["选手姓名"])
+    edited_df = st.data_editor(df_players, num_rows="dynamic", use_container_width=True, key="player_editor")
+    
+    raw_list = edited_df["选手姓名"].tolist()
+    clean_list = [str(p) for p in raw_list if pd.notna(p) and str(p).strip() != ""]
+    st.session_state.players = clean_list
+
     count = len(st.session_state.players)
     st.write(f"当前人数: **{count}** 人")
     
-    # 动态计算场次
-    match_count = 0
-    if count >= 4:
-        match_count = int(count * (count - 1) / 4) # 估算场次，仅供显示
+    # 3. 动态预估文本
+    target_match = get_target_match_count(count, mode_option)
     
     btn_disabled = count < 4
-    btn_label = f"🎲 生成新赛程 ({count}人 ≈ {match_count}场)" if count >=4 else "🚫 至少需要4人"
+    if count < 4:
+        btn_label = "🚫 至少需要4人"
+    else:
+        btn_label = f"🎲 生成赛程 ({target_match}场)"
+    
+    st.info(f"💡 预计生成 **{target_match}** 场比赛。")
     
     if st.button(btn_label, type="primary", disabled=btn_disabled):
-        generate_full_schedule()
+        generate_full_schedule(mode_option)
         st.rerun()
         
     if st.button("⚠️ 清空所有赛程"):
